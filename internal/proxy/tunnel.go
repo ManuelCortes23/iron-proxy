@@ -98,18 +98,18 @@ func (p *Proxy) handleCONNECT(conn net.Conn, br *bufio.Reader) error {
 
 	ok, rejectResp, connectAnnotations := p.tunnelTransformCheck(conn.RemoteAddr().String(), host, req.Header)
 	if !ok {
-		status := 403
-		var headerLines string
-		if rejectResp != nil {
-			status = rejectResp.StatusCode
-			for k, vals := range rejectResp.Header {
-				for _, v := range vals {
-					headerLines += fmt.Sprintf("%s: %s\r\n", k, v)
-				}
+		if rejectResp == nil {
+			rejectResp = &http.Response{
+				StatusCode: http.StatusForbidden,
+				Proto:      "HTTP/1.1",
+				ProtoMajor: 1,
+				ProtoMinor: 1,
+				Header:     http.Header{},
+				Body:       http.NoBody,
 			}
 		}
-		if _, err := fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\n%s\r\n", status, http.StatusText(status), headerLines); err != nil {
-			return fmt.Errorf("write %d: %w", status, err)
+		if err := rejectResp.Write(conn); err != nil {
+			return fmt.Errorf("write rejection: %w", err)
 		}
 		return nil
 	}
