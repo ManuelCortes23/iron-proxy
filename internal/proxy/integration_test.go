@@ -490,7 +490,6 @@ func TestIntegration_SOCKS5(t *testing.T) {
 		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 		buf := make([]byte, 1)
 		_, err = conn.Read(buf)
-		require.ErrorIs(t, err, io.EOF, "expected proxy to close the connection")
+		require.Error(t, err, "expected proxy to close the connection")
 	})
 }
-

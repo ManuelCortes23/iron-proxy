@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ironsh/iron-proxy/internal/config"
 	"github.com/ironsh/iron-proxy/internal/transform"
 	"github.com/ironsh/iron-proxy/internal/transform/allowlist"
 )
@@ -356,6 +357,7 @@ func TestCONNECTTunnel_RawTCPPassthrough(t *testing.T) {
 	}()
 
 	p, _ := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	p.tlsMode = config.TLSModeMITM
 	tunnelAddr := startTunnelListener(t, p)
 
 	conn, err := net.Dial("tcp", tunnelAddr)
@@ -378,6 +380,58 @@ func TestCONNECTTunnel_RawTCPPassthrough(t *testing.T) {
 	_, err = io.ReadFull(conn, buf)
 	require.NoError(t, err)
 	require.Equal(t, "raw:pg-startup", string(buf))
+}
+
+func TestCONNECTTunnel_RawTCPPassthrough_ServerFirst(t *testing.T) {
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upstreamLn.Close() })
+
+	go func() {
+		conn, err := upstreamLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		_, _ = conn.Write([]byte("220 fake-smtp ready\r\n"))
+
+		buf := make([]byte, 32)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write(append([]byte("250 "), buf[:n]...))
+	}()
+
+	p, _ := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	p.tlsMode = config.TLSModeMITM
+	tunnelAddr := startTunnelListener(t, p)
+
+	conn, err := net.Dial("tcp", tunnelAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	target := upstreamLn.Addr().String()
+	_, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	require.NoError(t, err)
+
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	banner, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "220 fake-smtp ready\r\n", banner)
+
+	_, err = conn.Write([]byte("EHLO shortcut\r\n"))
+	require.NoError(t, err)
+
+	reply, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "250 EHLO shortcut\r\n", reply)
 }
 
 // TestSNIPassthrough_IgnoresCONNECTPort verifies that a client-supplied
