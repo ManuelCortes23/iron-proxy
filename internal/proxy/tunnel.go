@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/ironsh/iron-proxy/internal/config"
 	"github.com/ironsh/iron-proxy/internal/transform"
@@ -317,7 +318,9 @@ func (p *Proxy) tunnelTransformCheck(remoteAddr, target string, connectHeaders h
 
 // serveTunnel peeks at the client's first byte after the CONNECT/SOCKS5
 // handshake to detect TLS (0x16) vs plain HTTP. TLS connections get MITM'd;
-// plain HTTP is served directly through handleHTTP. Anything else is rejected.
+// plain HTTP is served directly through handleHTTP. Anything else is relayed as
+// raw TCP after the CONNECT-level transform has authenticated and policy-checked
+// the requested host:port.
 func (p *Proxy) serveTunnel(clientConn net.Conn, target string, tunnelInfo *transform.TunnelInfo) error {
 	br := bufio.NewReader(clientConn)
 	first, err := br.Peek(1)
@@ -338,7 +341,7 @@ func (p *Proxy) serveTunnel(clientConn net.Conn, target string, tunnelInfo *tran
 		return p.serveTunnelHTTP(peekedConn, target, tunnelInfo)
 	}
 
-	return fmt.Errorf("unsupported protocol (first byte 0x%02x) for target %s", first[0], target)
+	return p.serveTunnelRawTCP(peekedConn, target, tunnelInfo)
 }
 
 // serveTunnelTLS handles the TLS branch of a tunnel connection. In MITM mode
@@ -393,6 +396,45 @@ func cloneTunnelInfo(info *transform.TunnelInfo) *transform.TunnelInfo {
 		Target:            info.Target,
 		RequestTransforms: traces,
 	}
+}
+
+// serveTunnelRawTCP relays non-HTTP/non-TLS tunnel bytes directly to the
+// CONNECT target. Authorization and target policy already happened in
+// tunnelTransformCheck before the 200 Connection Established response.
+func (p *Proxy) serveTunnelRawTCP(clientConn net.Conn, target string, tunnelInfo *transform.TunnelInfo) error {
+	defer clientConn.Close()
+
+	result := &transform.PipelineResult{
+		Host:       target,
+		Method:     "TCP",
+		Path:       "",
+		RemoteAddr: clientConn.RemoteAddr().String(),
+		Mode:       transform.ModeMITM,
+		Tunnel:     cloneTunnelInfo(tunnelInfo),
+	}
+	_, finish := p.beginPipelineRun(result)
+	defer finish()
+
+	ctx, cancel := context.WithCancel(p.shutdownCtx)
+	defer cancel()
+
+	dialer := &net.Dialer{
+		Timeout:  30 * time.Second,
+		Resolver: p.resolver,
+	}
+	upstream, err := dialer.DialContext(ctx, "tcp", target)
+	if err != nil {
+		result.Action = transform.ActionContinue
+		result.StatusCode = http.StatusBadGateway
+		result.Err = err
+		return fmt.Errorf("dial raw tcp upstream %s: %w", target, err)
+	}
+	defer upstream.Close()
+
+	result.Action = transform.ActionContinue
+	result.StatusCode = http.StatusOK
+	proxyBidi(ctx, clientConn, upstream, p.logger)
+	return nil
 }
 
 // isHTTPMethodByte returns true if b could be the first byte of an HTTP method.

@@ -335,6 +335,51 @@ func TestSNIPassthrough_CONNECTTunnel(t *testing.T) {
 	require.Equal(t, "echo /tunneled\n", string(body))
 }
 
+func TestCONNECTTunnel_RawTCPPassthrough(t *testing.T) {
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upstreamLn.Close() })
+
+	go func() {
+		conn, err := upstreamLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 32)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write(append([]byte("raw:"), buf[:n]...))
+	}()
+
+	p, _ := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	tunnelAddr := startTunnelListener(t, p)
+
+	conn, err := net.Dial("tcp", tunnelAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	target := upstreamLn.Addr().String()
+	_, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	require.NoError(t, err)
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	_, err = conn.Write([]byte("pg-startup"))
+	require.NoError(t, err)
+
+	buf := make([]byte, len("raw:pg-startup"))
+	_, err = io.ReadFull(conn, buf)
+	require.NoError(t, err)
+	require.Equal(t, "raw:pg-startup", string(buf))
+}
+
 // TestSNIPassthrough_IgnoresCONNECTPort verifies that a client-supplied
 // CONNECT port does not influence the upstream port the proxy dials. This
 // prevents a malicious client from pivoting an allowlisted hostname onto a
