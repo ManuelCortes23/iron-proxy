@@ -136,6 +136,8 @@ type PipelineResult struct {
 
 	Action     TransformAction
 	StatusCode int
+	BytesIn    int64
+	BytesOut   int64
 
 	Tunnel *TunnelInfo
 
