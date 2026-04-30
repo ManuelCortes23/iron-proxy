@@ -136,8 +136,9 @@ func (p *Proxy) serveSNIPassthrough(clientConn net.Conn) error {
 
 // proxyBidi copies bytes between two connections in both directions. When
 // either direction ends (EOF, error, or ctx cancellation), both connections
-// are closed so the other direction unblocks.
-func proxyBidi(ctx context.Context, a, b net.Conn, logger *slog.Logger) {
+// are closed so the other direction unblocks. It returns bytes copied a->b and
+// b->a respectively.
+func proxyBidi(ctx context.Context, a, b net.Conn, logger *slog.Logger) (int64, int64) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -149,10 +150,14 @@ func proxyBidi(ctx context.Context, a, b net.Conn, logger *slog.Logger) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+	var aToB int64
+	var bToA int64
 
 	go func() {
 		defer wg.Done()
-		if _, err := io.Copy(b, a); err != nil {
+		n, err := io.Copy(b, a)
+		aToB = n
+		if err != nil {
 			logger.Debug("sni passthrough a->b copy error", slog.String("error", err.Error()))
 		}
 		cancel()
@@ -160,11 +165,14 @@ func proxyBidi(ctx context.Context, a, b net.Conn, logger *slog.Logger) {
 
 	go func() {
 		defer wg.Done()
-		if _, err := io.Copy(a, b); err != nil {
+		n, err := io.Copy(a, b)
+		bToA = n
+		if err != nil {
 			logger.Debug("sni passthrough b->a copy error", slog.String("error", err.Error()))
 		}
 		cancel()
 	}()
 
 	wg.Wait()
+	return aToB, bToA
 }
