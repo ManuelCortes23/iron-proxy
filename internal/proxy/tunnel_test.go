@@ -393,8 +393,15 @@ func TestTunnelInfoPropagatesToInnerTransforms(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	_, tunnelAddr, _ := startTunnelProxy(t, []transform.Transformer{tunnelInfoTransform})
-	target := upstream.Listener.Addr().String()
+	p, tunnelAddr, _ := startTunnelProxy(t, []transform.Transformer{tunnelInfoTransform})
+	upstreamAddr := upstream.Listener.Addr().String()
+	p.transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, upstreamAddr)
+		},
+	}
+
+	target := "tunnel-info.example.com:80"
 
 	conn, err := net.DialTimeout("tcp", tunnelAddr, 5*time.Second)
 	require.NoError(t, err)

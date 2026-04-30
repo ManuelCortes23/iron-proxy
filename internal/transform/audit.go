@@ -23,19 +23,25 @@ func NewAuditLogger(logger *slog.Logger) AuditFunc {
 			action = "error"
 		}
 
-		attrs := []any{
-			slog.Group("audit",
-				slog.String("host", result.Host),
-				slog.String("method", result.Method),
-				slog.String("path", result.Path),
-				slog.String("remote_addr", result.RemoteAddr),
-				slog.String("sni", result.SNI),
-				slog.String("mode", result.Mode.String()),
-				slog.String("action", action),
-				slog.Int("status_code", result.StatusCode),
-				slog.Float64("duration_ms", float64(result.Duration.Microseconds())/1000.0),
-			),
+		auditFields := []any{
+			slog.String("host", result.Host),
+			slog.String("method", result.Method),
+			slog.String("path", result.Path),
+			slog.String("remote_addr", result.RemoteAddr),
+			slog.String("sni", result.SNI),
+			slog.String("mode", result.Mode.String()),
+			slog.String("action", action),
+			slog.Int("status_code", result.StatusCode),
+			slog.Float64("duration_ms", float64(result.Duration.Microseconds())/1000.0),
 		}
+		if result.BytesIn > 0 || result.BytesOut > 0 {
+			auditFields = append(auditFields,
+				slog.Int64("bytes_in", result.BytesIn),
+				slog.Int64("bytes_out", result.BytesOut),
+			)
+		}
+
+		attrs := []any{slog.Group("audit", auditFields...)}
 		if result.Tunnel != nil {
 			tunnelAttrs := []any{slog.String("target", result.Tunnel.Target)}
 			if len(result.Tunnel.RequestTransforms) > 0 {
