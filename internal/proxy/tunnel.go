@@ -445,7 +445,7 @@ func (p *Proxy) serveTunnelRawTCP(clientConn net.Conn, target string, connectAnn
 
 	result.Action = transform.ActionContinue
 	result.StatusCode = http.StatusOK
-	proxyBidi(ctx, clientConn, upstream, p.logger)
+	result.BytesIn, result.BytesOut = proxyBidi(ctx, clientConn, upstream, p.logger)
 	return nil
 }
 

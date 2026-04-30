@@ -34,6 +34,12 @@ func NewAuditLogger(logger *slog.Logger) AuditFunc {
 			slog.Int("status_code", result.StatusCode),
 			slog.Float64("duration_ms", float64(result.Duration.Microseconds())/1000.0),
 		}
+		if result.BytesIn > 0 || result.BytesOut > 0 {
+			auditFields = append(auditFields,
+				slog.Int64("bytes_in", result.BytesIn),
+				slog.Int64("bytes_out", result.BytesOut),
+			)
+		}
 		for k, v := range result.TunnelAnnotations {
 			if s, ok := v.(string); ok {
 				auditFields = append(auditFields, slog.String(k, s))

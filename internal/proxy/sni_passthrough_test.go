@@ -365,7 +365,7 @@ func TestCONNECTTunnel_RawTCPPassthrough(t *testing.T) {
 		_, _ = conn.Write(append([]byte("raw:"), buf[:n]...))
 	}()
 
-	p, _ := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	p, getResults := buildSNIProxy(t, []string{"127.0.0.1"}, true)
 	p.tlsMode = config.TLSModeMITM
 	tunnelAddr := startTunnelListener(t, p)
 
@@ -389,6 +389,16 @@ func TestCONNECTTunnel_RawTCPPassthrough(t *testing.T) {
 	_, err = io.ReadFull(conn, buf)
 	require.NoError(t, err)
 	require.Equal(t, "raw:pg-startup", string(buf))
+
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool {
+		results := getResults()
+		if len(results) == 0 {
+			return false
+		}
+		got := results[len(results)-1]
+		return got.Method == "TCP" && got.BytesIn >= int64(len("pg-startup")) && got.BytesOut >= int64(len("raw:pg-startup"))
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestCONNECTTunnel_RawTCPPassthrough_ServerFirst(t *testing.T) {
@@ -413,7 +423,7 @@ func TestCONNECTTunnel_RawTCPPassthrough_ServerFirst(t *testing.T) {
 		_, _ = conn.Write(append([]byte("250 "), buf[:n]...))
 	}()
 
-	p, _ := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	p, getResults := buildSNIProxy(t, []string{"127.0.0.1"}, true)
 	p.tlsMode = config.TLSModeMITM
 	tunnelAddr := startTunnelListener(t, p)
 
@@ -441,6 +451,16 @@ func TestCONNECTTunnel_RawTCPPassthrough_ServerFirst(t *testing.T) {
 	reply, err := reader.ReadString('\n')
 	require.NoError(t, err)
 	require.Equal(t, "250 EHLO shortcut\r\n", reply)
+
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool {
+		results := getResults()
+		if len(results) == 0 {
+			return false
+		}
+		got := results[len(results)-1]
+		return got.Method == "TCP" && got.BytesIn >= int64(len("EHLO shortcut\r\n")) && got.BytesOut >= int64(len("220 fake-smtp ready\r\n250 EHLO shortcut\r\n"))
+	}, time.Second, 10*time.Millisecond)
 }
 
 // TestSNIPassthrough_IgnoresCONNECTPort verifies that a client-supplied
