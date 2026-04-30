@@ -326,11 +326,15 @@ func (p *Proxy) tunnelTransformCheck(remoteAddr, target string, connectHeaders h
 }
 
 // serveTunnel peeks at the client's first byte after the CONNECT/SOCKS5
-// handshake to detect TLS (0x16) vs plain HTTP. TLS connections get MITM'd;
-// plain HTTP is served directly through handleHTTP. Anything else is relayed as
-// raw TCP after the CONNECT-level transform has authenticated and policy-checked
-// the requested host:port.
+// handshake only for web ports where the proxy can reasonably expect
+// client-first HTTP or TLS. Non-web raw TCP protocols may be server-first
+// (SMTP banner, some custom protocols), so those must relay immediately after
+// CONNECT auth/policy instead of waiting for client bytes.
 func (p *Proxy) serveTunnel(clientConn net.Conn, target string, connectAnnotations map[string]any) error {
+	if !p.shouldSniffTunnelProtocol(target) {
+		return p.serveTunnelRawTCP(clientConn, target, connectAnnotations)
+	}
+
 	br := bufio.NewReader(clientConn)
 	first, err := br.Peek(1)
 	if err != nil {
@@ -351,6 +355,23 @@ func (p *Proxy) serveTunnel(clientConn net.Conn, target string, connectAnnotatio
 	}
 
 	return p.serveTunnelRawTCP(peekedConn, target, connectAnnotations)
+}
+
+func (p *Proxy) shouldSniffTunnelProtocol(target string) bool {
+	if p.tlsMode == config.TLSModeSNIOnly {
+		return true
+	}
+
+	_, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return true
+	}
+	switch port {
+	case "80", "443", "8443":
+		return true
+	default:
+		return false
+	}
 }
 
 // serveTunnelTLS handles the TLS branch of a tunnel connection. In MITM mode
