@@ -555,8 +555,8 @@ func TestCONNECTTunnel_RawTCPBufferedClientBytes(t *testing.T) {
 		}
 		defer conn.Close()
 
-		buf := make([]byte, 32)
-		n, err := conn.Read(buf)
+		buf := make([]byte, len("pg-startup"))
+		n, err := io.ReadFull(conn, buf)
 		if err != nil {
 			return
 		}
@@ -576,13 +576,14 @@ func TestCONNECTTunnel_RawTCPBufferedClientBytes(t *testing.T) {
 	_, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\npg-startup", target, target)
 	require.NoError(t, err)
 
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	buf := make([]byte, len("raw:pg-startup"))
-	_, err = io.ReadFull(conn, buf)
+	_, err = io.ReadFull(reader, buf)
 	require.NoError(t, err)
 	require.Equal(t, "raw:pg-startup", string(buf))
 
