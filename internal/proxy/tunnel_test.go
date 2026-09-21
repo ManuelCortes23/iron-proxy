@@ -798,3 +798,43 @@ func TestServeOneHTTPConn_HijackWaitsForHandler(t *testing.T) {
 		t.Fatal("serveOneHTTPConn did not return after the hijacking handler finished")
 	}
 }
+
+// A completed tunnel must release its per-connection HTTP server. Before
+// upstream #208, Serve remained blocked in oneConnListener.Accept forever.
+func TestTunnelHTTPServerReturnsAfterDisconnect(t *testing.T) {
+	cases := []struct {
+		name string
+		tls  bool
+	}{
+		{name: "http"},
+		{name: "tls", tls: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _, caPool := startTunnelProxy(t, nil)
+			for range 100 {
+				client, server := net.Pipe()
+				require.NoError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+				returned := make(chan error, 1)
+				go func() {
+					if tc.tls {
+						returned <- p.serveTunnelTLS(server, "example.com:443", nil)
+					} else {
+						returned <- p.serveTunnelHTTP(server, "example.com:80", nil)
+					}
+				}()
+				if tc.tls {
+					conn := tls.Client(client, &tls.Config{RootCAs: caPool, ServerName: "example.com"})
+					require.NoError(t, conn.Handshake())
+				}
+				require.NoError(t, client.Close())
+				select {
+				case err := <-returned:
+					require.NoError(t, err)
+				case <-time.After(5 * time.Second):
+					t.Fatal("tunnel HTTP server retained after client disconnected")
+				}
+			}
+		})
+	}
+}

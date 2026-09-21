@@ -542,3 +542,57 @@ func TestSNIPassthrough_IgnoresCONNECTPort(t *testing.T) {
 		// no connection to decoy, as expected.
 	}
 }
+
+func TestCONNECTTunnel_RawTCPBufferedClientBytes(t *testing.T) {
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = upstreamLn.Close() })
+
+	go func() {
+		conn, err := upstreamLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 32)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write(append([]byte("raw:"), buf[:n]...))
+	}()
+
+	p, getResults := buildSNIProxy(t, []string{"127.0.0.1"}, true)
+	p.tlsMode = config.TLSModeMITM
+	tunnelAddr := startTunnelListener(t, p)
+
+	conn, err := net.Dial("tcp", tunnelAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+
+	target := upstreamLn.Addr().String()
+	_, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\npg-startup", target, target)
+	require.NoError(t, err)
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	buf := make([]byte, len("raw:pg-startup"))
+	_, err = io.ReadFull(conn, buf)
+	require.NoError(t, err)
+	require.Equal(t, "raw:pg-startup", string(buf))
+
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool {
+		results := getResults()
+		if len(results) == 0 {
+			return false
+		}
+		got := results[len(results)-1]
+		return got.Method == "TCP" && got.BytesIn >= int64(len("pg-startup")) && got.BytesOut >= int64(len("raw:pg-startup"))
+	}, time.Second, 10*time.Millisecond)
+}

@@ -346,15 +346,17 @@ func (p *Proxy) tunnelTransformCheck(remoteAddr, target string, connectHeaders h
 // (SMTP banner, some custom protocols), so those must relay immediately after
 // CONNECT auth/policy instead of waiting for client bytes.
 func (p *Proxy) serveTunnel(clientConn net.Conn, target string, tunnelInfo *transform.TunnelInfo) error {
-	if !p.shouldSniffTunnelProtocol(target) {
-		return p.serveTunnelRawTCP(clientConn, target, tunnelInfo)
-	}
-
 	br := bufio.NewReader(clientConn)
 	return p.serveTunnelWithReader(clientConn, br, target, tunnelInfo)
 }
 
 func (p *Proxy) serveTunnelWithReader(clientConn net.Conn, br *bufio.Reader, target string, tunnelInfo *transform.TunnelInfo) error {
+	if !p.shouldSniffTunnelProtocol(target) {
+		// CONNECT may have already buffered client bytes while parsing headers.
+		// Preserve them while allowing server-first protocols to dial immediately.
+		return p.serveTunnelRawTCP(newPeekedConn(clientConn, br), target, tunnelInfo)
+	}
+
 	first, err := br.Peek(1)
 	if err != nil {
 		return fmt.Errorf("peek client protocol: %w", err)
