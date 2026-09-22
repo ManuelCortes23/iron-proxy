@@ -26,6 +26,7 @@ type Server struct {
 	started   time.Time
 	revision  string
 	profileMu sync.Mutex
+	logger    *slog.Logger
 }
 
 func Enabled() bool {
@@ -38,7 +39,7 @@ func Start(ctx context.Context, logger *slog.Logger) (*Server, error) {
 	if !Enabled() {
 		return nil, nil
 	}
-	s := newServer()
+	s := newServer(logger)
 	listener, err := net.Listen("tcp", Address)
 	if err != nil {
 		return nil, err
@@ -63,8 +64,8 @@ func Start(ctx context.Context, logger *slog.Logger) (*Server, error) {
 	return s, nil
 }
 
-func newServer() *Server {
-	s := &Server{started: time.Now().UTC(), revision: "unknown"}
+func newServer(logger *slog.Logger) *Server {
+	s := &Server{started: time.Now().UTC(), revision: "unknown", logger: logger}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			if setting.Key == "vcs.revision" {
@@ -75,7 +76,9 @@ func newServer() *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /runtime", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(s.Snapshot())
+		if err := json.NewEncoder(w).Encode(s.Snapshot()); err != nil {
+			s.logger.Error("go_diagnostics_response_failed", "error", err.Error())
+		}
 	})
 	for _, name := range []string{"heap", "goroutine"} {
 		mux.HandleFunc("GET /debug/pprof/"+name, func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +94,9 @@ func newServer() *Server {
 			}
 			defer s.profileMu.Unlock()
 			w.Header().Set("Content-Type", "application/octet-stream")
-			_ = pprof.Lookup(name).WriteTo(w, 0)
+			if err := pprof.Lookup(name).WriteTo(w, 0); err != nil {
+				s.logger.Error("go_profile_response_failed", "profile", name, "error", err.Error())
+			}
 		})
 	}
 	s.http = &http.Server{Addr: Address, Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second}
@@ -137,6 +142,8 @@ func (s *Server) Snapshot() map[string]any {
 	}
 	if files, err := os.ReadDir("/proc/self/fd"); err == nil {
 		v["fd_count"] = len(files)
+	} else {
+		v["fd_count_error"] = fmt.Sprintf("%T", err)
 	}
 	return v
 }
