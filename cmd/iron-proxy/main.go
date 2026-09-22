@@ -19,6 +19,7 @@ import (
 	"github.com/ironsh/iron-proxy/internal/certcache"
 	"github.com/ironsh/iron-proxy/internal/config"
 	"github.com/ironsh/iron-proxy/internal/controlplane"
+	"github.com/ironsh/iron-proxy/internal/diagnostics"
 	idns "github.com/ironsh/iron-proxy/internal/dns"
 	"github.com/ironsh/iron-proxy/internal/dnsguard"
 	"github.com/ironsh/iron-proxy/internal/management"
@@ -76,6 +77,12 @@ func main() {
 	logger, err := config.NewLogger(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	diagnosticServer, err := diagnostics.Start(ctx, logger)
+	if err != nil {
+		logger.Error("starting staging diagnostics", "error", err.Error())
 		os.Exit(1)
 	}
 
@@ -333,6 +340,11 @@ func main() {
 	}
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("metrics server shutdown error", slog.String("error", err.Error()))
+	}
+	if diagnosticServer != nil {
+		if err := diagnosticServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("diagnostics shutdown error", "error", err.Error())
+		}
 	}
 	if mgmtServer != nil {
 		if err := mgmtServer.Shutdown(shutdownCtx); err != nil {
